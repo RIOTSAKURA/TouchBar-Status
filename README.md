@@ -32,10 +32,6 @@ TouchBarAgentStatus 是一个零依赖的单文件 Swift 程序（`main.swift`�
   - `DFRFoundation` 私有框架：托盘图标可见性 + 关闭 close box
   - 每 2s 轮询时重新断言呈现，防止系统因切换前台应用收回
 
-## 为什么不是 VSCode 插件
-
-VSCode 扩展无法渲染 Touch Bar 内容（Electron 不向扩展暴露 NSTouchBar API），因此本项目是一个原生 Swift AppKit 菜单栏应用，走本地数据库轮询，与 VSCode 无耦合。
-
 ## 项目结构
 
 ```
