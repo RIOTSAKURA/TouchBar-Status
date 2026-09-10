@@ -132,15 +132,26 @@ final class OpenCodeMonitor {
                 return status
             }
         }
-        // 无 running 工具: 按最近一次 part 类型判断 (10s 内有输出视为 working)
-        if nowMs - status.lastActivityMs < 10_000 {
-            if let last = parts.first,
-               let obj = try? JSONSerialization.jsonObject(with: Data(last.data.utf8)) as? [String: Any],
-               (obj["type"] as? String) == "reasoning" {
-                status.kind = .reasoning
-            } else {
-                status.kind = .writing
-                status.snippet = latestTextSnippet(parts)
+        // 无 running 工具: 按最近一次 part 类型分级判定宽限期
+        // (数据库无写入 ≠ agent 空闲: step-start 后的 prefill/长思考、reasoning 流间歇都会长时间无写入)
+        if let last = parts.first,
+           let obj = try? JSONSerialization.jsonObject(with: Data(last.data.utf8)) as? [String: Any] {
+            let lastType = obj["type"] as? String ?? ""
+            var kind = StatusKind.writing
+            var graceMs = 10_000.0
+            switch lastType {
+            case "step-start":  // 一步已开始但尚无产出, 视为 thinking (600s 上限防进程崩溃残留)
+                kind = .reasoning
+                graceMs = 600_000
+            case "reasoning":  // 流式推理中, 宽限 120s 容忍流中间歇
+                kind = .reasoning
+                graceMs = 120_000
+            default:  // text / step-finish 等: 正在输出或回合已结束, 维持 10s
+                break
+            }
+            if nowMs - last.updated < graceMs {
+                status.kind = kind
+                if case .writing = kind { status.snippet = latestTextSnippet(parts) }
             }
         }
         return status

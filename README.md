@@ -24,7 +24,10 @@ TouchBarAgentStatus 是一个零依赖的单文件 Swift 程序（`main.swift`�
 - **数据源**：`~/.local/share/opencode/opencode.db`（SQLite，只读模式打开，WAL 模式下并发读安全，无需 `opencode serve`）
 - **状态判定**：取最近活跃 session，扫描最近 30 个 part：
   - `type=="tool" && state.status=="running"`（180s 有效期）→ 显示工具名 + `state.input` 中的命令/路径摘要
-  - 最近 10s 内有 text / reasoning 输出 → `writing`（附最近文本首行）/ `thinking`
+  - 按最近一次 part 类型分级判定（数据库无写入 ≠ agent 空闲）：
+    - `step-start`（一步已开始但尚无产出，如 prefill / 长思考）→ `thinking`（600s 上限，防进程崩溃残留）
+    - `reasoning` → `thinking`（120s 宽限，容忍流中间歇）
+    - 其他（`text` / `step-finish` 等，10s 内有更新）→ `writing`（附最近文本首行）
   - 否则 → `idle`（显示会话标题）
 - **Touch Bar 显示**（MTMR 同款技术）：
   - `NSTouchBarItem.addSystemTrayItem` 注册托盘图标（经 ObjC runtime IMP 直调，新版 SDK 已删除声明）
@@ -73,5 +76,5 @@ make uninstall-agent
 
 - 触控栏呈现依赖私有 API（`DFRFoundation` + AppKit 未公开类方法），macOS 大版本更新后可能失效
 - `TBAS_PLACEMENT` 取 2-5 时 `presentSystemModalTouchBar` 会永久阻塞（内部枚举值未知），仅 0/1 可用
-- "正在工作"的判定基于数据库最近写入时间（10s 窗口）+ 工具 running 状态（180s 有效期），agent 长时间无输出的等待场景（如等待用户授权）可能显示为 idle
+- "正在工作"的判定基于数据库最近写入时间（分级宽限：`step-start` 600s / `reasoning` 120s / 其他 10s）+ 工具 running 状态（180s 有效期），超过宽限仍无写入的等待场景（如等待用户授权）仍会显示为 idle
 - 仅监控最近活跃的一个 session；subagent 运行时显示的是最近更新的那个 session
