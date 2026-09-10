@@ -78,3 +78,4 @@ make uninstall-agent
 - `TBAS_PLACEMENT` 取 2-5 时 `presentSystemModalTouchBar` 会永久阻塞（内部枚举值未知），仅 0/1 可用
 - "正在工作"的判定基于数据库最近写入时间（分级宽限：`step-start` 600s / `reasoning` 120s / 其他 10s）+ 工具 running 状态（180s 有效期），超过宽限仍无写入的等待场景（如等待用户授权）仍会显示为 idle
 - 仅监控最近活跃的一个 session；subagent 运行时显示的是最近更新的那个 session
+- TUI 内切换 session 是纯客户端行为，不会写入数据库（session 表 / event 表 / 日志均无记录），因此静息状态显示的标题跟随的是「最近有活动的 session」而非「当前聚焦的 session」——切换到旧 session 后，标题需等该 session 产生新活动（发消息）才会更新。此为数据源限制，只读轮询方案下无法感知聚焦状态
