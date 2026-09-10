@@ -10,6 +10,8 @@ TouchBarAgentStatus 是一个零依赖的单文件 Swift 程序（`main.swift`�
 
 - Touch Bar App 区域实时状态（白色加粗大字，各状态图标不同）：
   - `🔧 BASH · git status ⠋` — 正在运行工具（工具名 + 输入命令/路径摘要）
+  - `🔔🔕 awaiting approval · git push` — 等待用户授权（铃铛 1Hz 闪烁 + 待授权命令摘要）
+  - `🔔 awaiting input` — question 工具等待用户回答
   - `✍️ writing · 最近输出首行 ⠋` — 正在输出文本（附最近文本片段）
   - `🧠 thinking ⠋` — 正在推理
   - `💤 · 会话标题` — 无近期活动
@@ -23,6 +25,8 @@ TouchBarAgentStatus 是一个零依赖的单文件 Swift 程序（`main.swift`�
 
 - **数据源**：`~/.local/share/opencode/opencode.db`（SQLite，只读模式打开，WAL 模式下并发读安全，无需 `opencode serve`）
 - **状态判定**：取最近活跃 session，扫描最近 30 个 part：
+  - `type=="tool" && state.status=="pending"` 且 30s 无更新（参数流式已结束、授权未通过）→ `awaiting approval`（30min 上限，附 `state.input` 命令摘要）
+  - `tool=="question" && state.status=="running"` → `awaiting input`（执行期即等待用户回答期，30min 上限）
   - `type=="tool" && state.status=="running"`（180s 有效期）→ 显示工具名 + `state.input` 中的命令/路径摘要
   - 按最近一次 part 类型分级判定（数据库无写入 ≠ agent 空闲）：
     - `step-start`（一步已开始但尚无产出，如 prefill / 长思考）→ `thinking`（600s 上限，防进程崩溃残留）
@@ -76,6 +80,6 @@ make uninstall-agent
 
 - 触控栏呈现依赖私有 API（`DFRFoundation` + AppKit 未公开类方法），macOS 大版本更新后可能失效
 - `TBAS_PLACEMENT` 取 2-5 时 `presentSystemModalTouchBar` 会永久阻塞（内部枚举值未知），仅 0/1 可用
-- "正在工作"的判定基于数据库最近写入时间（分级宽限：`step-start` 600s / `reasoning` 120s / 其他 10s）+ 工具 running 状态（180s 有效期），超过宽限仍无写入的等待场景（如等待用户授权）仍会显示为 idle
+- "正在工作"的判定基于数据库最近写入时间（分级宽限：`step-start` 600s / `reasoning` 120s / 其他 10s）+ 工具 running 状态（180s 有效期）；等待授权（`pending` 冻结 >30s）与 question 等待回答已单独识别为 `awaiting` 状态，但 30min 上限之后（含进程崩溃残留）会回落为 idle
 - 仅监控最近活跃的一个 session；subagent 运行时显示的是最近更新的那个 session
 - TUI 内切换 session 是纯客户端行为，不会写入数据库（session 表 / event 表 / 日志均无记录），因此静息状态显示的标题跟随的是「最近有活动的 session」而非「当前聚焦的 session」——切换到旧 session 后，标题需等该 session 产生新活动（发消息）才会更新。此为数据源限制，只读轮询方案下无法感知聚焦状态

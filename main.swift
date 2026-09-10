@@ -34,6 +34,7 @@ enum StatusKind {
     case writing
     case reasoning
     case tool(String)
+    case awaiting(String)
     case error(String)
 }
 
@@ -57,6 +58,7 @@ struct AgentStatus {
         case .writing: return "✍️ writing"
         case .reasoning: return "🧠 thinking"
         case .tool(let t): return "🔧 \(t.uppercased())"
+        case .awaiting(let what): return "🔔 awaiting \(what)"
         case .error(let e): return "⚠️ \(e)"
         }
     }
@@ -67,6 +69,7 @@ struct AgentStatus {
         case .writing: return "writing · \(title)"
         case .reasoning: return "thinking · \(title)"
         case .tool(let t): return "tool:\(t) · \(title)"
+        case .awaiting(let what): return "awaiting \(what) · \(title)"
         case .error(let e): return "error: \(e)"
         }
     }
@@ -118,15 +121,29 @@ final class OpenCodeMonitor {
         status.directory = sess.directory
         status.lastActivityMs = sess.updated
 
-        // 2. 该会话最近的 parts, 找 running 工具 / 最新活动类型
+        // 2. 该会话最近的 parts, 找等待授权 / running 工具 / 最新活动类型
         let parts = recentParts(sessionID: sess.id)
         for p in parts {
             status.lastActivityMs = max(status.lastActivityMs, p.updated)
             guard let obj = try? JSONSerialization.jsonObject(with: Data(p.data.utf8)) as? [String: Any] else { continue }
             let type = obj["type"] as? String ?? ""
+            guard type == "tool" else { continue }
             let tool = obj["tool"] as? String ?? ""
             let st = (obj["state"] as? [String: Any])?["status"] as? String ?? ""
-            if type == "tool" && st == "running" && nowMs - p.updated < 180_000 {
+            let ageMs = nowMs - p.updated
+            // pending 且 30s 无更新 = 参数流式已结束, 正在等待用户授权
+            // (流式期间 time_updated 持续刷新不会误报; 30min 上限防进程崩溃残留)
+            if st == "pending" && ageMs > 30_000 && ageMs < 1_800_000 {
+                status.kind = .awaiting("approval")
+                status.snippet = toolSnippet(obj)
+                return status
+            }
+            // question 工具的 running 阶段 = 等待用户回答
+            if tool == "question" && st == "running" && ageMs < 1_800_000 {
+                status.kind = .awaiting("input")
+                return status
+            }
+            if st == "running" && ageMs < 180_000 {
                 status.kind = .tool(tool)
                 status.snippet = toolSnippet(obj)
                 return status
@@ -166,10 +183,16 @@ final class OpenCodeMonitor {
     }
 
     private func recentParts(sessionID: String) -> [(data: String, updated: Double)] {
+        // 不复用 runQuery: 其 collect 返回非 nil 即提前退出, 只能收集到第一行
         var out: [(data: String, updated: Double)] = []
-        runQuery("SELECT data, time_updated FROM part WHERE session_id = ?1 ORDER BY time_updated DESC LIMIT 30", bind: sessionID) { stmt in
+        guard let db else { return out }
+        var stmt: OpaquePointer?
+        let sql = "SELECT data, time_updated FROM part WHERE session_id = ?1 ORDER BY time_updated DESC LIMIT 30"
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK, let stmt else { return out }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_text(stmt, 1, sessionID, -1, SQLITE_TRANSIENT_DESTRUCTOR)
+        while sqlite3_step(stmt) == SQLITE_ROW {
             out.append((copyText(stmt, 0), sqlite3_column_double(stmt, 1)))
-            return Void()
         }
         return out
     }
@@ -266,6 +289,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             segments = s.title.isEmpty ? ["💤"] : ["💤", shorten(s.title, 24)]
         case .error(let e):
             segments = ["⚠️", e]
+        case .awaiting(let what):
+            // 铃铛 1Hz 闪烁, 提醒需要用户操作 (授权 / 回答)
+            let bell = (tick / 2) % 2 == 0 ? "🔔" : "🔕"
+            segments = ["\(bell) awaiting \(what)"]
+            if !s.snippet.isEmpty { segments.append(shorten(s.snippet, 30)) }
         default:
             segments = [s.shortDescription]
             if !s.snippet.isEmpty { segments.append(shorten(s.snippet, 30)) }
@@ -279,6 +307,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .writing: trayIcon = "✍️"
         case .reasoning: trayIcon = "🧠"
         case .tool: trayIcon = "🔧"
+        case .awaiting: trayIcon = "🔔"
         }
         trayButton.title = trayIcon
         statusItem.button?.title = s.isWorking ? s.shortDescription : "💤"
